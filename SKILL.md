@@ -29,7 +29,7 @@ Full mechanics in `references/rules.md` §0.
 
 1. **MCP connected.** Run `tools/list`. Confirm Robinhood trading tools are present. If not, tell the user the MCP is unreachable and stop.
 2. **Account is the dedicated Agentic account.** Read the account identifier from the MCP. Confirm it is the Agentic account, **not** the user's primary individual account. Robinhood only permits agentic trading from dedicated Agentic accounts.
-3. **Market is open.** Confirm regular session is live (rule §5 above). If closed, signal scans continue but no order tool may be invoked.
+3. **Market is open and time-state is known.** Confirm regular session is live (rule §5 above). If closed, signal scans continue but no order tool may be invoked. If open, resolve the current time state (`A` / `B` / `C`) per `references/time-state.md` §1 and stamp it on every proposal and log line.
 4. **`mode.toml` exists and is parseable.** Read `mode.toml` at repo root. Required fields: `mode` (`"paper"` or `"live"`), `live_allowlist` (list, may be empty), `require_manual_confirm` (bool). If the file is missing, create it with paper defaults and tell the user.
 5. **`watchlist.json` exists and is parseable.** Required fields: `watchlist` (array; `[]` allowed) and `cash_reserve_pct` (number 0–100). Each watchlist entry needs `symbol`, `description`, `max_allocation_pct`. If missing, halt and tell the user.
 6. **No kill switch.** If `KILL_SWITCH` file exists at repo root, refuse to place any order (signal scans still allowed).
@@ -47,6 +47,7 @@ Full mechanics in `references/rules.md` §0.
 │
 ├─ 3. For each candidate ticker, compute conviction tier
 │     load: references/rules.md (sizing, exits, combined-signal bonus)
+│     load: references/time-state.md (apply A/B/C modifiers to sizing/spread/entry-gate)
 │
 ├─ 4. Run the 5-question Decision Framework per candidate (see §5)
 │     Any unsatisfactory answer → skip the trade, log the reason.
@@ -54,17 +55,24 @@ Full mechanics in `references/rules.md` §0.
 ├─ 5. Emit a pre-trade review block per surviving candidate
 │     ticker | signal_source | conviction | tier | qty | limit | max_loss
 │
-├─ 6. WRITE PENDING ENTRY to trade-log.jsonl  ← BEFORE any MCP order tool
+├─ 6. WRITE PROPOSAL to proposals/{intent_id}.json + spawn risk-reviewer subagent
+│     (only when mode.toml::require_risk_review = true — recommended default)
+│     load: references/risk-review.md if you haven't already
+│     Wait for the subagent's JSON decision; write it to reviews/{intent_id}.json.
+│     If decision == "reject": skip MCP, log rejection reasons (jump to step 9).
+│     If decision == "approve": proceed.
 │
-├─ 7. Execute based on mode:
+├─ 7. WRITE PENDING ENTRY to trade-log.jsonl  ← BEFORE any MCP order tool
+│
+├─ 8. Execute based on mode:
 │     paper → mark result: "paper", skip MCP order tool
 │     live  → call MCP order tool; if require_manual_confirm=true, pause
 │             update log entry with mcp_response + result
 │
-├─ 8. Scan all open positions for the −8% hard stop (rule §3). Close immediately on breach.
+├─ 9. Scan all open positions for the −8% hard stop (rule §0.3). Close immediately on breach.
 │
-└─ 9. Update journal/{YYYY-MM-DD}.md (human-readable markdown — template in rules §7)
-     MANDATORY even on zero-trade days (rule §0.4).
+└─ 10. Update journal/{YYYY-MM-DD}.md (human-readable markdown — template in rules §8)
+      MANDATORY even on zero-trade days (rule §0.4).
 ```
 
 ## 5. Decision Framework (answer all 5 before every trade)
@@ -86,6 +94,8 @@ For each candidate that survives signal scoring, the agent **must** answer all f
 | Signal A scoring (politician clusters) | `references/politician-signal.md` |
 | Signal B scoring (insider clusters) | `references/insider-signal.md` |
 | Signal C scoring (social media — **draft, not yet active**) | `references/social-signal.md` |
+| Two-agent flow: when to spawn the risk-reviewer subagent | `references/risk-review.md` |
+| Time-state policy (Morning / Midday / Power Hour modifiers) | `references/time-state.md` |
 | Mode, watchlist, sizing, exits, kill switch, trade-log schema | `references/rules.md` |
 
 Do **not** preload reference files unless step 1–7 needs them. Progressive disclosure keeps context lean.

@@ -139,7 +139,18 @@ Recommended routine config:
 | Repositories | This repo |
 | Environment | Default (Trusted) is fine; add `SEC_USER_AGENT`, `QUIVER_API_KEY` etc. as env vars |
 | Connectors | **Robinhood Agentic Trading** (required). Others optional. |
-| Trigger | Schedule → **Weekdays at 9:35 ET** (5 min after open) |
+| Triggers (recommended — time-state aware) | See table below |
+
+**Time-state-aware schedule** (per `references/time-state.md`). Each trigger fires the same routine; the SOP resolves its own state and applies the right modifiers:
+
+| Cron (America/New_York) | State at trigger | What runs |
+| --- | --- | --- |
+| **09:35 weekdays** | A — Morning Discovery | Full SOP loop. Overnight cluster signals execute with **State A sizing (0.5×)** and wider spread filter. |
+| **10:35 weekdays** | B — Midday Drift | Position sweep. Hard-stop ratchet resumes. New entries gated to **high-tier only**. |
+| **15:05 weekdays** | C — Power Hour | Best execution window. Trailing-stop tightening across the book. Standard sizing. |
+| **15:55 weekdays** | C (end) | End-of-Day Reflection + final stop-out sweep + journal commit. |
+
+If your daily routine cap is tight, drop the 10:35 trigger — State B is mostly monitoring. Single-trigger fallback: just **09:35** (loses the Power Hour edge).
 
 **Prompt (paste into the routine):**
 
@@ -149,18 +160,24 @@ daily SOP loop end-to-end:
 
 1. Verify all hard preconditions (SKILL.md §3). Halt with a written reason if any
    precondition fails — do not place trades on a partial check.
-2. Refresh Signal A (politicians) and Signal B (insiders) per references/
+2. Resolve the current time state (A/B/C/CLOSED) per references/time-state.md
+   §1. Apply the state's sizing multiplier, spread filter, and entry gate.
+3. Refresh Signal A (politicians) and Signal B (insiders) per references/
    politician-signal.md and references/insider-signal.md.
-3. For each candidate, answer the 5-question Decision Framework (SKILL.md §5)
+4. For each candidate, answer the 5-question Decision Framework (SKILL.md §5)
    in writing in the journal.
-4. Honor mode.toml: paper today unless mode = "live".
-5. Write trade-log.jsonl entries BEFORE any MCP order tool call.
-6. Place orders (or paper-log them) per references/rules.md.
-7. Scan open positions for the −8% hard stop AND the profit-protection trailing
+5. Honor mode.toml: paper today unless mode = "live".
+6. If require_risk_review = true: spawn the risk-reviewer subagent with the
+   proposal (.claude/agents/risk-reviewer.md). Only proceed on "approve".
+7. Write trade-log.jsonl entries BEFORE any MCP order tool call. Include
+   time_state and state_size_multiplier.
+8. Place orders (or paper-log them) per references/rules.md.
+9. Scan open positions for the −8% hard stop AND the profit-protection trailing
    stop (rules.md §0.3 and §4.3). Close on breach.
-8. Update journal/{today}.md with all required sections, including End-of-Day
-   Reflection. Commit the journal entry and trade-log line to a claude/* branch
-   and open a PR back to main.
+   - Skip the §4.3 hard-stop ratchet in State A (time-state.md §2.5).
+10. Update journal/{today}.md with all required sections, including
+    End-of-Day Reflection. Commit the journal entry and trade-log line to a
+    claude/* branch and open a PR back to main.
 
 Stop conditions and safety rules in SKILL.md §2 and §8 are non-negotiable —
 do not override them.
@@ -233,33 +250,14 @@ Each reference file is self-contained and tunable at the bottom (`[signal_a]`, `
 
 Loose list of things that aren't built yet. Pull from the top.
 
-### 1. Two-agent split — Trader (A) + Risk Reviewer (B)
+### 1. ~~Two-agent split — Trader + Risk Reviewer~~ ✅ Built
 
-> **Why:** the current design has the same agent that scores the signal also place the order. A risk-review second agent catches "the trader convinced itself" failure modes, and the rule-check logic is more honest when written by an agent that didn't propose the trade.
+Trader (main session running `SKILL.md`) spawns the `risk-reviewer` subagent (`.claude/agents/risk-reviewer.md`) before every MCP order call. Reviewer does pure rule-checking against `references/rules.md` §0, the watchlist, mode.toml, and the trade log. Binary approve/reject. Toggle: `require_risk_review = true` in `mode.toml`. Full design in `references/risk-review.md`.
 
-Proposed shape:
+Open follow-ups (not yet built):
 
-- **Agent A — Trader.** Runs the daily loop in `SKILL.md` *up to* the trade proposal. Writes proposals to `proposals/{intent_id}.json` (a new dir, gitignored). Does **not** invoke the Robinhood MCP order tool. Emits one proposal per surviving candidate.
-- **Agent B — Risk Reviewer.** Triggered after Agent A finishes (sequential routine, or a separate routine that polls `proposals/`). Has **read-only** access to the Robinhood MCP, the proposal file, and the full repo. Independently re-checks:
-  - All five non-negotiables in `rules.md` §0
-  - The 5-question Decision Framework (`SKILL.md` §5)
-  - Watchlist membership + cash reserve + per-symbol cap
-  - The −8% / trailing-stop math
-- **Decision artifact:** Agent B writes `reviews/{intent_id}.json` with `{ "decision": "approve" | "reject", "reasons": [...] }`.
-- **Execution:** an Agent A continuation (or a third agent) reads the review, and only invokes the MCP order tool when `decision == "approve"`. Rejections append to `trade-log.jsonl` with `result: "rejected_by_risk_review"` and a reasons array.
-
-Implementation sketch:
-
-- Two Claude Code routines, chained by file-watch or by Routine B running 10 min after Routine A.
-- Or a single agent session that explicitly spawns a `Risk-Reviewer` subagent with its own restricted toolset.
-- The Risk Reviewer needs a system prompt that emphasizes adversarial review — "find a reason to reject" rather than "rubber-stamp."
-- Useful prior art: pull-request review patterns. The trader is the author, the reviewer is the (skeptical) approver.
-
-Open questions:
-
-- Does Agent B need its own conviction model, or just rule-checking? Start with strict rule-checking only.
-- How do we handle a "soft reject" (Agent B downgrades tier instead of rejecting)? Probably defer — keep it binary for v1.
-- Do we want Agent B to be able to *propose* exits (e.g. spotting a Form 4 sell that Agent A missed)? Probably yes in v2.
+- Two-routine cloud variant (Routine A writes proposals/, Routine B reviews on PR event). Documented in `references/risk-review.md` §9.
+- Allowing the Reviewer to *propose* exits when it spots a Form 4 sale that the Trader missed.
 
 ### 2. Activate Signal C (social media)
 

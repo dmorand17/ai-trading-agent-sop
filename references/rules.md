@@ -184,7 +184,14 @@ Driven by the conviction tier emitted by `politician-signal.md` or `insider-sign
 | medium | 1.0% |
 | high | 2.0% |
 
-`qty = floor((equity × tier_pct) / limit_price)`.
+`qty = floor((equity × tier_pct × time_state_multiplier) / limit_price)`.
+
+`time_state_multiplier` comes from `references/time-state.md`:
+
+- State A (09:30–10:30 ET): **0.5** (morning discovery — risk down).
+- State B (10:30–15:00 ET): **1.0** (only high-tier entries allowed at all).
+- State C (15:00–16:00 ET): **1.0** baseline, or **1.25** if `mode.toml::state_c_size_bump = true` and tier ∈ {medium, high}.
+- `respect_time_state = false`: always **1.0**.
 
 Then **clamp downward** to satisfy:
 
@@ -212,7 +219,12 @@ If clamping reduces `qty` below 1 share, skip the trade and log `Decision: Skipp
 
 - **Order type:** limit only. Never market.
 - **Limit price:** `last_quote × 1.002` (20 bps slippage budget on top of the ask).
-- **Spread filter:** if `(ask − bid) / mid > 0.005` (50 bps), skip — wide spread is a quality flag.
+- **Spread filter (state-dependent):** skip when `(ask − bid) / mid` exceeds:
+  - State A: **100 bps** (mornings are structurally wider)
+  - State B: **50 bps** (baseline)
+  - State C: **30 bps** (Power Hour spreads should be tight; wide quote = something is wrong)
+- **State B entry gate:** only `tier == "high"` candidates may enter. Medium/low are logged and skipped. See `references/time-state.md` §3.1.
+- **State A volume confirmation:** require 5-min realized volume ≥ 2× the 10-day 5-min average before entering. See `references/time-state.md` §2.4.
 - **Time-in-force:** day order. Re-evaluate next session if not filled.
 - **One entry per signal:** do not split into multiple child orders for cluster-signal trades.
 
@@ -267,6 +279,7 @@ Map `gain_pct` to a trailing band and a hard-stop ratchet:
 3. Persist `peak_mark` and the active tier in the journal so the state survives across SOP runs. Suggested file: `positions.jsonl` (one record per `ticker × entry_intent_id`).
 4. The take-profit rows in §4.2 fire *in addition to* the trailing stop. If the market gaps through both, prefer the more conservative (closes more / closes earlier).
 5. If the trailing band triggers between regular sessions, queue the close for the next open per §0.5.
+6. **State-A exception:** during State A (09:30–10:30 ET), do **not** ratchet the hard stop even if `gain_pct` crosses +15%. Morning fake-outs would lock break-even prematurely. The ratchet resumes from State B onward. See `references/time-state.md` §2.5.
 
 ### 4.4 Cooldown
 
@@ -298,13 +311,14 @@ For each candidate that survives all gates:
    ```
    ticker=ACME  signal=B  score=78  tier=medium  qty=120  limit=42.25  max_loss=$507  account=Agentic-…XYZ
    ```
-2. **Append a pending entry to `trade-log.jsonl`** (see §7 schema) with `result: "pending"`.
-3. If `mode = "paper"`: rewrite the same line (by re-appending — the JSONL is append-only, so write a `result: "paper"` entry with the same `intent_id`).
-4. If `mode = "live"`:
+2. **If `mode.toml::require_risk_review = true`:** write `proposals/{intent_id}.json`, spawn the `risk-reviewer` subagent (`.claude/agents/risk-reviewer.md`), and wait for its JSON decision. Write the decision to `reviews/{intent_id}.json`. On `reject`, skip steps 3–5: append a single `trade-log.jsonl` line with `result: "rejected_by_risk_review"` and `rejection_reasons: [...]`, then go to step 6 (journal update). See `references/risk-review.md` for the full flow.
+3. **Append a pending entry to `trade-log.jsonl`** (see §7 schema) with `result: "pending"`.
+4. If `mode = "paper"`: re-append a line with the same `intent_id` and `result: "paper"`.
+5. If `mode = "live"`:
    - If `require_manual_confirm = true`: prompt the user `Place order? [yes/no]`. Wait for `yes`.
    - Invoke the Robinhood MCP order tool (limit, day, equity, buy).
    - On response: append a closing entry with `result: "submitted"` (or `"rejected"` / `"error"`) and the `mcp_response` payload.
-5. Update `journal/{YYYY-MM-DD}.md` whether or not the trade went through:
+6. Update `journal/{YYYY-MM-DD}.md` whether or not the trade went through:
    - Add a row to the **Trades Executed** table for every order placed (paper or live).
    - Add a row to **Positions Closed** for every exit (stop-out, take-profit, trailing-stop).
    - At end of session, fill in **End-of-Day Reflection**.
@@ -365,7 +379,8 @@ One JSON object per line, append-only, at repo root.
 | `account_id_masked` | yes | Last 4 chars of the Agentic account id. Never log the full id. |
 | `mcp_tool_called` | live only | Name of the Robinhood tool actually invoked. |
 | `mcp_response` | live only | Full structured response, including the broker order id when available. |
-| `result` | yes | `"pending"` (pre-call), `"paper"`, `"submitted"`, `"filled"`, `"rejected"`, `"error"`. |
+| `result` | yes | `"pending"` (pre-call), `"paper"`, `"submitted"`, `"filled"`, `"rejected"`, `"rejected_by_risk_review"`, `"error"`. |
+| `rejection_reasons` | when `result = "rejected_by_risk_review"` | Array of strings copied verbatim from the Reviewer's decision. |
 | `error_msg` | optional | Set when `result` ∈ `{"rejected", "error"}`. |
 | `rules_version` | yes | Date stamp of the rules file that produced this decision — lets you reconstruct historical behavior after rule edits. |
 
