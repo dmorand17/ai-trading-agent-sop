@@ -1,0 +1,35 @@
+# AI Trading Agent SOP — execution mode
+# Edit this file to control how the SOP behaves on every invocation.
+# Schema: references/rules.md §1.1
+
+# "paper" → SOP runs end-to-end but never invokes a Robinhood MCP order tool.
+# "live"  → SOP places real orders.
+mode = "paper"
+
+# Empty list = all tickers eligible when in live mode.
+# Populated list = ONLY these tickers may receive live orders.
+# Use to stage the rollout: ["AAPL"] → ["AAPL","MSFT"] → [] (open).
+live_allowlist = []
+
+# true  = pause for explicit user "yes" in chat before every live order.
+# false = auto-execute live orders, gated only by allowlist, risk caps, kill switch.
+require_manual_confirm = true
+
+# Global blocklist — overrides everything, including signal A+B+C bonuses.
+block_tickers = []
+
+# Daily loss cap as a fraction of Agentic-account equity. Halts new entries on breach.
+daily_loss_cap_pct = 0.02
+
+# Total cluster-signal exposure cap.
+max_cluster_exposure_pct = 0.25
+
+# Per-ticker exposure cap (default for tickers NOT in watchlist.json).
+# Watchlist symbols use their own max_allocation_pct instead.
+max_ticker_exposure_pct = 0.05
+
+# Signal C (social media) — DRAFT, off by default. See references/social-signal.md.
+[signal_c]
+active = false
+trial = true
+sources = ["apewisdom"]
