@@ -23,18 +23,20 @@ Code session is the executor at runtime. `CLAUDE.md` is the always-loaded dispat
 .
 ├── CLAUDE.md                         ← Always-loaded dispatcher: goal, rules, daily loop
 ├── README.md                         ← (this file)
-├── mode.toml                         ← User-edited: paper vs live, allowlist, manual-confirm
-├── watchlist.json                    ← User-edited: universe + per-symbol caps + cash reserve
+├── config.toml                       ← User-edited: mode, allowlist, caps, universe pointer
+├── themes.toml                       ← Ticker → theme mapping for P&L analytics
 ├── KILL_SWITCH                       ← (create to halt new orders; delete to resume)
 ├── trade-log.jsonl                   ← Append-only audit log (single analytics source)
 ├── positions.jsonl                   ← Trailing-stop state (peak_mark per open position)
+├── WEEKLY-REVIEW.md                  ← Appended each Friday by the weekly-review skill
 ├── journal/
 │   └── YYYY-MM-DD.md                 ← One markdown journal per trading day
 ├── scripts/
-│   └── notify.sh                     ← ntfy push notifications (optional)
+│   └── notify.sh                     ← ntfy push notifications
 ├── references/
 │   ├── strategy.md                   ← Strategies, sizing, exits, mode, log schemas (canonical)
-│   └── risk-review.md                ← Two-agent risk-review flow
+│   ├── risk-review.md                ← Two-agent risk-review flow
+│   └── robinhood-mcp.md              ← Robinhood MCP tool reference
 └── .claude/
     ├── agents/
     │   └── risk-reviewer.md          ← Adversarial rule-check subagent
@@ -44,46 +46,36 @@ Code session is the executor at runtime. `CLAUDE.md` is the always-loaded dispat
 > The original cluster-signal engine (congressional buys, insider Form 4) and the time-state
 > policy live in `_archived/` for reference. They are not part of the active SOP.
 
-## Configuration files
+## Configuration
 
-The SOP reads two config files at repo root on every invocation. Both are user-edited; the SOP
-never writes to them.
+### `config.toml`
 
-### `mode.toml`
-
-Controls execution mode and the safety gates. Full schema in `references/strategy.md` §1.1.
+Controls execution mode, safety gates, and the universe pointer. Full schema in
+`references/strategy.md` §1.1.
 
 ```toml
-mode = "paper"                     # "paper" | "live"
-live_allowlist = []                # empty = all eligible in live; ["AAPL"] = only AAPL
-require_manual_confirm = true      # pause for "yes" before every live order
-block_tickers = []                 # global blocklist
-daily_loss_cap_pct = 0.02          # halt new entries when day P&L ≤ −this × equity
-require_risk_review = true          # spawn the risk-reviewer subagent before each order
+mode = "paper"                              # "paper" | "live"
+live_allowlist = []                         # [] = all eligible in live; ["AAPL"] = only AAPL
+require_manual_confirm = true               # pause for "yes" before every live order
+block_tickers = []                          # global blocklist, overrides everything
+daily_loss_cap_pct = 0.02                   # halt new entries when day P&L ≤ −this × equity
+cash_reserve_pct = 0.10                     # minimum cash floor as a fraction of equity
+sop_universe_list_name = "Agent WatchList"  # Robinhood watchlist used as the universe
+discovery_mode = false                      # true = no universe filter (paper only)
+require_risk_review = true                  # spawn risk-reviewer subagent before each order
 ```
 
-### `watchlist.json`
+### `themes.toml`
 
-Defines the trading universe, per-symbol allocation caps (overriding the 5% default), and the
-cash reserve floor. Full schema in `references/strategy.md` §2.
-
-```json
-{
-  "watchlist": [
-    { "symbol": "SPY",  "description": "S&P 500 ETF — baseline market exposure",  "max_allocation_pct": 15 },
-    { "symbol": "QQQ",  "description": "Nasdaq ETF — tech sector exposure",         "max_allocation_pct": 10 },
-    { "symbol": "NVDA", "description": "GPU/AI infrastructure — high conviction",  "max_allocation_pct":  8 },
-    { "symbol": "AAPL", "description": "Large cap tech — stability anchor",         "max_allocation_pct":  8 },
-    { "symbol": "MSFT", "description": "Cloud/enterprise — AI infrastructure play", "max_allocation_pct":  8 }
-  ],
-  "cash_reserve_pct": 20
-}
-```
+Maps every ticker in the Agent WatchList to one of eleven investment themes (nuclear, robotics,
+space, ai, data_centers, cybersecurity, semiconductors, quantum_computing, defense_tech,
+clean_energy, biotech). The `theme` field in `trade-log.jsonl` is populated from here; keep it
+in sync whenever the Robinhood watchlist is modified.
 
 ### `.env` (gitignored)
 
-Robinhood MCP auth is handled by the connector itself and does **not** belong here. Only
-third-party keys (e.g. the optional ntfy push-notification token) go here. See `.env.example`.
+Robinhood MCP auth is handled by the connector itself. Only third-party keys (e.g. the ntfy
+push-notification token) go here. See `.env.example`.
 
 ## Prerequisites
 
@@ -93,8 +85,9 @@ third-party keys (e.g. the optional ntfy push-notification token) go here. See `
    - Endpoint: `https://agent.robinhood.com/mcp/trading`
    - Transport: HTTP
    - Install via Claude Code's connectors UI or in `~/.claude/.mcp.json`.
-3. **`mode.toml` and `watchlist.json`** present and valid at repo root.
-4. **`.gitignore`** that excludes `.env`, `trade-log.jsonl`, `journal/`, `positions.jsonl`.
+3. **`config.toml`** present and valid at repo root (create from the schema above).
+4. **Agent WatchList** created on Robinhood (display name must match `sop_universe_list_name`).
+5. **`.gitignore`** that excludes `.env`, `trade-log.jsonl`, `journal/`, `positions.jsonl`.
 
 ## Running the SOP interactively
 
@@ -111,12 +104,12 @@ From a Claude Code session **with this repo as the working directory**:
 rules, and the daily loop. It will:
 
 1. Check preconditions (MCP up, account is Agentic, market open, configs valid, no kill switch).
-2. Score each watchlist ticker against the three strategies.
+2. Pull the Agent WatchList from Robinhood and score each ticker against the three strategies.
 3. Apply the 5-question Decision Framework, size positions.
 4. Write a `pending` line to `trade-log.jsonl` for each candidate.
 5. Either skip the MCP (paper) or place a limit order (live, possibly behind a confirm prompt).
 6. Update `journal/YYYY-MM-DD.md` and `trade-log.jsonl` with final state.
-7. Scan open positions for the −8% hard stop and the profit-protection trailing stop.
+7. Scan open positions for the tiered trailing stop (12%/8%/6%/4% bands per `strategy.md` §0.3).
 
 ## Phase skills
 
@@ -156,7 +149,7 @@ skill. A minimal single-trigger fallback is just `market-open` at 09:35.
 ```text
 Follow this repo's CLAUDE.md (the AI Trading Agent SOP dispatcher) and run today's phase.
 Verify all hard preconditions and halt with a written reason if any fail — never trade on a
-partial check. Honor mode.toml (paper unless mode = "live"). If require_risk_review = true,
+partial check. Honor config.toml (paper unless mode = "live"). If require_risk_review = true,
 spawn the risk-reviewer subagent and proceed only on "approve". Write the trade-log.jsonl line
 BEFORE any MCP order tool. Update journal/{today}.md with all sections, including the
 End-of-Day Reflection. The non-negotiable rules in references/strategy.md §0 are absolute.
@@ -165,8 +158,8 @@ End-of-Day Reflection. The non-negotiable rules in references/strategy.md §0 ar
 ### Routine safety notes
 
 - The routine runs **autonomously**, with no approval prompts during the run. The trade-log +
-  Decision Framework + `mode.toml::require_manual_confirm` + the risk-reviewer are the only gates
-  between the cloud session and a live Robinhood order.
+  Decision Framework + `config.toml::require_manual_confirm` + the risk-reviewer are the only
+  gates between the cloud session and a live Robinhood order.
 - Keep `mode = "paper"` for the first ≥ 30 trading days. Read the journals and trade-log
   analytics before flipping live.
 - A cloud routine can push to `claude/*`-prefixed branches by default; journal commits land
@@ -174,24 +167,36 @@ End-of-Day Reflection. The non-negotiable rules in references/strategy.md §0 ar
 
 ## Local automation alternatives
 
-- **`/loop` in an open CLI session** — the `loop` skill at 30–60m intervals during market hours.
 - **macOS LaunchAgent / cron** — run `claude -p "Run today's SOP phase"` from launchd or cron.
   Requires your laptop on and the CLI authenticated.
 
 The hard requirement either way is that **the Robinhood MCP connector is reachable from wherever
 the SOP runs**.
 
-## Notifications (optional)
+## Notifications
 
-`scripts/notify.sh` posts a push notification to an [ntfy](https://ntfy.sh) topic. The phase
-skills have `TODO(notify)` hooks ready to call it.
+`scripts/notify.sh` posts a push notification to an [ntfy](https://ntfy.sh) topic. Set your
+credentials in `.env` (copied from `.env.example`) and the phase skills will call it
+automatically.
 
 ```bash
-export NTFY_TOKEN=tk_...                       # required
-export NTFY_SERVER=https://ntfy.example.com    # optional, default https://ntfy.sh
-export NTFY_TOPIC=agentic-trading              # optional, default agentic-trading
-./scripts/notify.sh -t "market-open" "Bought 5 NVDA @ $847.50"
+# .env
+NTFY_TOKEN=tk_...                        # required
+NTFY_SERVER=https://ntfy.example.com     # optional, default https://ntfy.sh
+NTFY_TOPIC=agentic-trading               # optional, default agentic-trading
 ```
+
+```bash
+# Manual test
+./scripts/notify.sh -t "market-open" "Bought 5 NVDA @ $847.50"
+./scripts/notify.sh -t "stop hit" -p 5 -T "warning" "TSLA trailing stop fired"
+```
+
+Notification behavior per phase:
+- **pre-market** — fires only when urgent (high-tier candidate, open position near stop, or stop condition active)
+- **market-open** — fires only when a trade or exit is placed
+- **daily-summary** — always fires once with the EOD recap
+- **weekly-review** — always fires once with the weekly summary
 
 ## Analytics
 
@@ -204,21 +209,26 @@ jq -s 'group_by(.intent_id) | map(max_by(.timestamp_utc))' trade-log.jsonl
 # Realized P&L by strategy
 jq -s '[.[] | select(.side=="sell" and .result=="filled")] | group_by(.signal_source)
        | map({src: .[0].signal_source, pnl: ([.[].realized_pnl_usd] | add)})' trade-log.jsonl
+
+# Realized P&L by theme
+jq -s '[.[] | select(.side=="sell" and .result=="filled")] | group_by(.theme)
+       | map({theme: .[0].theme, pnl: ([.[].realized_pnl_usd] | add)}) | sort_by(-.pnl)' trade-log.jsonl
 ```
 
 ```sql
 -- DuckDB
 CREATE VIEW trades AS SELECT * FROM read_json_auto('trade-log.jsonl');
-SELECT signal_source, SUM(realized_pnl_usd) AS pnl, COUNT(*) AS n
+SELECT theme, signal_source, SUM(realized_pnl_usd) AS pnl, COUNT(*) AS n
 FROM trades WHERE side='sell' AND result='filled'
-GROUP BY signal_source;
+GROUP BY theme, signal_source
+ORDER BY pnl DESC;
 ```
 
 See `references/strategy.md` §7.1 for the full schema and recipes.
 
 ## Stopping the SOP
 
-- **Pause for confirmation:** set `require_manual_confirm = true` in `mode.toml`.
+- **Pause for confirmation:** set `require_manual_confirm = true` in `config.toml`.
 - **Halt all new orders (exits keep running):** create an empty `KILL_SWITCH` file at repo root.
 - **Routine paused/deleted:** toggle or delete it at [claude.ai/code/routines](https://claude.ai/code/routines).
 
@@ -228,6 +238,7 @@ See `references/strategy.md` §7.1 for the full schema and recipes.
 2. Read `references/strategy.md` — the canonical strategies, sizing, exits, and the
    non-negotiables in §0.
 3. Read `references/risk-review.md` — the two-agent rule-check.
+4. Read `themes.toml` — the ticker → theme mapping for P&L analytics.
 
 ## Roadmap / Ideas
 
@@ -243,6 +254,6 @@ See `references/strategy.md` §7.1 for the full schema and recipes.
 
 ## Disclaimer
 
-This is documented decision logic, not financial advice. The hard cap in `strategy.md` §0.1, the
-per-symbol limits in `watchlist.json`, and the cash reserve are user-settable; pick conservative
-levels and start in paper mode.
+This is documented decision logic, not financial advice. The hard cap in `strategy.md` §0.1 and
+the cash reserve in `config.toml` are user-settable; pick conservative levels and start in paper
+mode.

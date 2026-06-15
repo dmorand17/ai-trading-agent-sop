@@ -40,10 +40,16 @@ This is the **execution phase** of the AI Trading Agent SOP. Read the project `C
 Message only when an order is placed (paper or live) or an exit fires. Include ticker(s), side,
 qty, limit, mode. No trade → stay silent.
 
-<!-- TODO(notify): wire to scripts/notify.sh when ready, e.g.
-       ./scripts/notify.sh -t "market-open" "<message>"
-     Until then, emit the message as the final session line only when a trade or exit occurred;
-     otherwise end silent. -->
+When a trade or exit fires, send one notification via `scripts/notify.sh`. Read `.env` first to
+confirm `NTFY_TOKEN` is set; if missing, emit as the final session line instead.
+
+```bash
+# order placed
+./scripts/notify.sh -t "market-open" -p 3 -T "moneybag" "Bought 5 NVDA @ $847.50 [paper]"
+
+# trailing stop exit
+./scripts/notify.sh -t "market-open" -p 4 -T "warning" "TSLA trailing stop fired — sold 10 @ $189.20"
+```
 
 ## Report back (≤5 lines)
 

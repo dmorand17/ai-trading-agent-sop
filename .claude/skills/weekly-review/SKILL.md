@@ -46,11 +46,12 @@ places orders and never edits `trade-log.jsonl` or prior daily journals (§10: a
 
 ## Notification policy: always send one message
 
-Send exactly **one** weekly summary message.
+Send exactly **one** weekly summary message. Read `.env` first to confirm `NTFY_TOKEN` is set;
+if missing, emit as the final session line instead.
 
-<!-- TODO(notify): wire to scripts/notify.sh when ready, e.g.
-       ./scripts/notify.sh -t "weekly-review" "<message>"
-     Until then, emit the one-message recap as the final session line. -->
+```bash
+./scripts/notify.sh -t "weekly-review" -p 3 -T "calendar" "<weekly recap ≤6 lines>"
+```
 
 ## Report back (the one weekly message, ≤6 lines)
 

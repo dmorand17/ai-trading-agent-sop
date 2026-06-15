@@ -58,11 +58,16 @@ Always run these four in order; the rest builds on them.
 its §0.3 trailing band and will need action at the open, OR a stop condition is live (`CLAUDE.md`
 stop conditions). Otherwise stay silent.
 
-<!-- TODO(notify): wire to scripts/notify.sh when ready, e.g.
-       ./scripts/notify.sh -t "pre-market" "<message>"
-     Until then, emit the urgent message as the final session line. On a non-urgent day, end
-     with a single quiet line:
-       "pre-market: nothing urgent — N candidates drafted." -->
+When urgent, send one notification via `scripts/notify.sh`. Read `.env` first to confirm
+`NTFY_TOKEN` is set; if missing, emit the message as the final session line instead.
+
+```bash
+# urgent — candidate or stop condition
+./scripts/notify.sh -t "pre-market" -p 4 -T "chart_increasing" "<message>"
+
+# non-urgent — end the session silently with a single quiet line (no notify call):
+# "pre-market: nothing urgent — N candidates drafted."
+```
 
 ## Report back (≤5 lines)
 
