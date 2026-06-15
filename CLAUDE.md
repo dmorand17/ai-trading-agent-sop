@@ -97,6 +97,7 @@ Bright-line invariants. If any conflicts with a strategy score, the rule wins. F
 | --- | --- |
 | Strategies, sizing, exits, mode, kill switch, log schemas | `references/strategy.md` |
 | When/how to spawn the risk-reviewer subagent | `references/risk-review.md` |
+| Robinhood MCP tool reference (signatures, defaults, gotchas) | `references/robinhood-mcp.md` |
 
 Do not preload references unless the loop needs them.
 
